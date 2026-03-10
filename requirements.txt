@@ -9,3 +9,5 @@ pydantic
 requests
 streamlit
 openai
+PyPDF2
+pdflatex
