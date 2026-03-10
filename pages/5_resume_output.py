@@ -133,7 +133,7 @@ if gen_btn and resume_content:
             from openai import OpenAI
             client = OpenAI(
                 base_url="https://integrate.api.nvidia.com/v1",
-                api_key=NVIDIA_API_KEY
+                api_key="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"
             )
 
             name = profile.get("name", "Your Name")
