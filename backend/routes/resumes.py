@@ -59,3 +59,9 @@ def delete_base_resume(resume_id: str):
     data["base_resumes"] = [r for r in data["base_resumes"] if r["id"] != resume_id]
     save_resumes(data)
     return {"message": "Deleted!"}
+@router.delete("/company/{resume_id}")
+def delete_company_resume(resume_id: str):
+    data = load_resumes()
+    data["company_resumes"] = [r for r in data["company_resumes"] if r["id"] != resume_id]
+    save_resumes(data)
+    return {"message": "Deleted!"}
