@@ -147,31 +147,212 @@ if gen_btn and resume_content:
             job_title = selected_job.get("title", "Software Engineer Intern") if selected_job else "Software Engineer Intern"
             company = selected_job.get("company", "") if selected_job else ""
 
-            prompt = f"""You are an expert LaTeX resume writer. Convert the following resume content into a clean, professional, strictly 1-page LaTeX resume.
+            prompt = fr"""
+You are an expert LaTeX resume writer.
 
-REQUIREMENTS:
-- Use the moderncv or a clean custom LaTeX template
-- Strictly 1 page — adjust font sizes and spacing to fit
-- ATS-friendly (no tables, no columns for main content, no graphics)
-- Use this exact personal info in the header:
-  Name: {name}
-  Email: {email}
-  Phone: {phone}
-  LinkedIn: {linkedin}
-  GitHub: {github}
-  University: {university}
-  Degree: {degree}
-  Graduation: {graduation}
-- Sections: Summary, Education, Experience, Projects, Skills
-- Bold company names and job titles
-- Use bullet points (\\item) for experience and projects
-- No colors except black
-- Output ONLY the complete LaTeX code, nothing else, no explanation, no markdown backticks
+Generate a clean, professional, ATS-friendly, strictly one-page resume in LaTeX using a Jake's Resume style layout.
+
+IMPORTANT OUTPUT RULES:
+1. Output ONLY complete compilable LaTeX code.
+2. Do NOT output markdown, backticks, explanations, notes, or any text outside the LaTeX source.
+3. Do NOT fabricate experience, metrics, tools, responsibilities, dates, project results, or technologies.
+4. You may rewrite bullet points for clarity, conciseness, impact, and ATS alignment, but must preserve factual accuracy.
+5. Keep the resume to exactly one page.
+6. Use concise bullets and compact spacing.
+7. Use only black text.
+8. Use no graphics, no icons, no images, no tables for the main content, and no multi-column body layout.
+9. Use this exact section order: Summary, Education, Experience, Projects, Skills.
+10. The final LaTeX must compile successfully with pdflatex.
+
+CRITICAL LATEX SAFETY RULES:
+1. Escape LaTeX special characters in all generated content:
+   - & -> \&
+   - % -> \%
+   - _ -> \_
+   - # -> \#
+2. Do not output malformed commands or unmatched braces.
+3. Do not leave placeholders like SUMMARY_TEXT, EXPERIENCE_ENTRIES, PROJECT_ENTRIES, or SKILLS_TEXT in the final output.
+4. Use -- for date ranges, never Unicode dashes like – or —.
+5. Every \resumeSubheading must have exactly 4 arguments.
+6. Every \resumeProjectHeading must have exactly 2 arguments.
+7. If a field is empty, output {{}} for that argument and never omit it.
+8. Never let a macro consume the next LaTeX command as a missing argument.
+
+HEADER INFORMATION TO USE EXACTLY:
+Name: {name}
+Email: {email}
+Phone: {phone}
+LinkedIn: {linkedin}
+GitHub: {github}
+
+EDUCATION INFORMATION TO USE EXACTLY:
+University: {university}
+Degree: {degree}
+Graduation: {graduation}
+
+PROJECT SELECTION RULES:
+1. Include EXACTLY 3 projects in the Projects section.
+2. Do NOT include fewer than 3 projects unless fewer than 3 projects exist in the input.
+3. Select the 3 strongest and most technically significant projects from the resume content.
+4. Prioritize projects that best demonstrate systems, software, ML, FPGA, RTL, embedded, architecture, optimization, deployment, or engineering depth.
+5. Each selected project must appear as its own separate \resumeProjectHeading entry.
+6. Do NOT merge multiple projects into one heading.
+7. Do NOT compress all project bullets under a single project title.
+8. Each of the 3 projects must have 2 or 3 concise bullets.
+9. If page space is tight, shorten bullets before reducing the number of projects.
+10. Prefer the most relevant and technically impressive projects rather than the most recent ones.
+
+CONTENT RULES:
+- Summary must be 2 to 3 lines maximum.
+- Experience and project bullets must begin with strong action verbs.
+- Use 2 to 4 bullets per experience or project.
+- Prefer concise, technical, ATS-friendly bullets over long generic bullets.
+- Keep project titles aligned consistently.
+- Keep formatting consistent across all sections.
+- Do not invent locations if none are provided.
+- Do not invent tech stacks if none are provided.
+
+EXPERIENCE ENTRY FORMAT:
+Use exactly this format for every experience entry:
+\resumeSubheading
+  {{{{Company Name}}}}{{{{Date Range}}}}
+  {{{{Job Title}}}}{{{{Location or {{}} if empty}}}}
+\resumeItemListStart
+  \resumeItem{{{{Bullet 1}}}}
+  \resumeItem{{{{Bullet 2}}}}
+  \resumeItem{{{{Bullet 3}}}}
+\resumeItemListEnd
+
+IMPORTANT:
+- \resumeSubheading always requires 4 arguments.
+- If location is missing, write:
+  \resumeSubheading
+    {{{{Open-Source Contributor}}}}{{{{}}}}
+    {{{{Contributor}}}}{{{{}}}}
+
+PROJECT ENTRY FORMAT:
+Use exactly this format for every project entry:
+\resumeProjectHeading
+  {{{{\textbf{{{{Project Name}}}} $|$ \emph{{{{Tech Stack / Focus}}}}}}}}{{{{}}}}
+\resumeItemListStart
+  \resumeItem{{{{Bullet 1}}}}
+  \resumeItem{{{{Bullet 2}}}}
+  \resumeItem{{{{Bullet 3}}}}
+\resumeItemListEnd
+
+IMPORTANT:
+- \resumeProjectHeading always requires exactly 2 arguments.
+- If there is no date or right-side label, the second argument must still be {{}}.
+- Output EXACTLY 3 separate project headings when at least 3 projects are present in the input.
+
+SKILLS FORMAT:
+Format skills exactly like this:
+\textbf{{Languages}}: ... \\
+\textbf{{Hardware / RTL}}: ... \\
+\textbf{{ML / AI}}: ... \\
+\textbf{{Tools / Platforms}}: ... \\
+\textbf{{Concepts}}: ...
+
+SUMMARY RULES:
+- Write a concise professional summary tailored to the resume content.
+- 2 to 3 lines maximum.
+- Mention degree level, strongest technical areas, and target engineering profile.
+- Keep it factual and ATS-friendly.
+
+USE THIS EXACT LATEX TEMPLATE AND FILL IT CORRECTLY:
+
+\documentclass[letterpaper,10pt]{{article}}
+
+\usepackage[empty]{{fullpage}}
+\usepackage{{titlesec}}
+\usepackage{{enumitem}}
+\usepackage[hidelinks]{{hyperref}}
+\usepackage{{fancyhdr}}
+
+\pagestyle{{fancy}}
+\fancyhf{{}}
+\renewcommand{{\headrulewidth}}{{0pt}}
+\renewcommand{{\footrulewidth}}{{0pt}}
+
+\addtolength{{\oddsidemargin}}{{-0.5in}}
+\addtolength{{\evensidemargin}}{{-0.5in}}
+\addtolength{{\textwidth}}{{1in}}
+\addtolength{{\topmargin}}{{-0.6in}}
+\addtolength{{\textheight}}{{1.2in}}
+
+\urlstyle{{same}}
+\raggedright
+\setlength{{\tabcolsep}}{{0in}}
+
+\titleformat{{\section}}{{
+  \vspace{{-4pt}}\scshape\raggedright\large
+}}{{}}{{0em}}{{}}[\titlerule \vspace{{-5pt}}]
+
+\newcommand{{\resumeItem}}[1]{{
+  \item\small{{#1 \vspace{{-2pt}}}}
+}}
+
+\newcommand{{\resumeSubheading}}[4]{{
+  \vspace{{-2pt}}\item
+    \begin{{tabular*}}{{0.97\textwidth}}[t]{{l@{{\extracolsep{{\fill}}}}r}}
+      \textbf{{#1}} & #2 \\
+      \textit{{\small #3}} & \textit{{\small #4}} \\
+    \end{{tabular*}}\vspace{{-7pt}}
+}}
+
+\newcommand{{\resumeProjectHeading}}[2]{{
+    \item
+    \begin{{tabular*}}{{0.97\textwidth}}{{l@{{\extracolsep{{\fill}}}}r}}
+      \small #1 & #2 \\
+    \end{{tabular*}}\vspace{{-7pt}}
+}}
+
+\newcommand{{\resumeSubHeadingListStart}}{{\begin{{itemize}}[leftmargin=0.15in, label={{}}]}}
+\newcommand{{\resumeSubHeadingListEnd}}{{\end{{itemize}}}}
+\newcommand{{\resumeItemListStart}}{{\begin{{itemize}}[leftmargin=0.2in]}}
+\newcommand{{\resumeItemListEnd}}{{\end{{itemize}}\vspace{{-5pt}}}}
+
+\begin{{document}}
+
+\begin{{center}}
+    {{\Huge \textbf{{{name}}}}} \\ \vspace{{2pt}}
+    {email} $|$ {phone} $|$ \href{{{linkedin}}}{{LinkedIn}} $|$ \href{{{github}}}{{GitHub}}
+\end{{center}}
+
+\section{{Summary}}
+SUMMARY_TEXT
+
+\section{{Education}}
+\resumeSubHeadingListStart
+  \resumeSubheading
+    {{{university}}}{{{graduation}}}
+    {{{degree}}}{{}}
+\resumeSubHeadingListEnd
+
+\section{{Experience}}
+\resumeSubHeadingListStart
+EXPERIENCE_ENTRIES
+\resumeSubHeadingListEnd
+
+\section{{Projects}}
+\resumeSubHeadingListStart
+PROJECT_ENTRIES
+\resumeSubHeadingListEnd
+
+\section{{Skills}}
+\begin{{itemize}}[leftmargin=0.15in, label={{}}]
+  \small{{\item {{
+    SKILLS_TEXT
+  }}}}
+\end{{itemize}}
+
+\end{{document}}
 
 RESUME CONTENT TO CONVERT:
 {resume_content}
 
-Output the complete compilable LaTeX code:"""
+Generate the final complete compilable LaTeX code only.
+"""
 
             response = client.chat.completions.create(
                 model="nvidia/llama-3.3-nemotron-super-49b-v1",
