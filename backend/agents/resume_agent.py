@@ -32,6 +32,47 @@ class AgentState(TypedDict):
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+
+def normalize_text(s: str) -> str:
+    s = (s or "").lower().strip()
+    s = s.replace("–", "-").replace("—", "-")
+    s = re.sub(r"[^a-z0-9\+\#\.\-/ ]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def normalize_keyword(k: str) -> str:
+    k = normalize_text(k)
+    synonyms = {
+        "llms": "llm",
+        "large language models": "llm",
+        "rest api": "api",
+        "restful api": "api",
+        "apis": "api",
+        "ci cd": "ci/cd",
+        "cicd": "ci/cd",
+        "machine learning": "ml",
+        "deep learning": "dl",
+        "computer vision": "cv",
+        "natural language processing": "nlp",
+        "amazon web services": "aws",
+        "docker containers": "docker",
+        "k8s": "kubernetes",
+        "system verilog": "systemverilog",
+        "rtl design": "rtl",
+        "verilog hdl": "verilog",
+    }
+    return synonyms.get(k, k)
+
+
+def compute_keyword_overlap(jd_keywords: List[str], present_keywords: List[str]) -> int:
+    jd_set = {normalize_keyword(x) for x in jd_keywords if x}
+    present_set = {normalize_keyword(x) for x in present_keywords if x}
+    if not jd_set:
+        return 0
+    score = round(100 * len(jd_set & present_set) / len(jd_set))
+    return max(0, min(100, score))
+
 def truncate(s: str, max_chars: int) -> str:
     if not s:
         return ""
@@ -110,32 +151,57 @@ def extract_first_json_object(text: str) -> Optional[Dict[str, Any]]:
 # -----------------------------------------------------------------------------
 def keyword_diagnostic_node(state: AgentState) -> AgentState:
     SYSTEM_JSON_ONLY = (
-        "You MUST output ONLY valid JSON. "
-        "No explanations, no reasoning, no markdown, no extra text."
+        "You are an ATS keyword analysis engine. "
+        "Return ONLY valid JSON. No markdown, no commentary, no extra text."
     )
 
-    jd = truncate(state.get("job_description", ""), 6000)
-    resume = truncate(state.get("resume_text", ""), 8000)
+    jd = truncate(state.get("job_description", ""), 7000)
+    resume = truncate(state.get("resume_text", ""), 9000)
 
     prompt = f"""
-Extract the TOP 15 required keywords/skills from the JOB DESCRIPTION.
-Compare them against the RESUME text.
+Analyze the JOB DESCRIPTION and RESUME.
 
-Return JSON ONLY with this exact schema:
+TASK:
+1. Extract the 12 most important ATS keywords from the JOB DESCRIPTION only.
+2. Keywords must be concrete and resume-usable:
+   - programming languages
+   - frameworks/tools
+   - cloud/devops/platforms
+   - domain skills
+   - role-specific responsibilities
+3. Avoid generic words like: team, communication, motivated, problem-solving, fast-paced.
+4. Prefer exact ATS phrases from the JD where useful.
+5. Compare those JD keywords against the RESUME.
+6. Mark a keyword as "present" if it is explicitly present or clearly equivalent in the resume.
+7. Mark all remaining JD keywords as "missing".
+
+OUTPUT JSON SCHEMA EXACTLY:
 {{
-  "jd_keywords": ["...15 strings..."],
-  "missing_keywords": ["..."],
-  "present_keywords": ["..."],
-  "match_score": 0
+  "jd_keywords": ["keyword1", "keyword2", "keyword3"],
+  "present_keywords": ["keyword1", "keyword2"],
+  "missing_keywords": ["keyword3"],
+  "keyword_categories": {{
+    "languages": ["..."],
+    "frameworks_tools": ["..."],
+    "cloud_devops": ["..."],
+    "domain": ["..."],
+    "responsibilities": ["..."]
+  }},
+  "summary": "1-2 sentence diagnosis"
 }}
+
+RULES:
+- Use only keywords from the JOB DESCRIPTION.
+- Do not invent keywords not supported by the JD.
+- Do not include duplicates.
+- Keep keyword strings short and ATS-friendly.
+- Return JSON only.
 
 JOB DESCRIPTION:
 {jd}
 
 RESUME:
 {resume}
-
-Return ONLY the JSON object now.
 """.strip()
 
     resp = client.chat.completions.create(
@@ -145,27 +211,63 @@ Return ONLY the JSON object now.
             {"role": "user", "content": prompt},
         ],
         temperature=0.0,
-        max_tokens=350,
+        max_tokens=650,
     )
 
     raw = get_message_text(resp)
 
-    # If still nothing, do not crash the whole pipeline—fallback gracefully
     if raw is None:
         state["keywords_missing"] = []
-        state["diagnostic_report"] = "Model returned no text (content/reasoning empty)."
+        state["diagnostic_report"] = json.dumps({
+            "jd_keywords": [],
+            "present_keywords": [],
+            "missing_keywords": [],
+            "match_score": 0,
+            "summary": "Model returned no output."
+        })
         return state
 
     data = extract_first_json_object(raw)
 
     if not isinstance(data, dict):
-        # Fallback if model didn't produce JSON
         state["keywords_missing"] = []
-        state["diagnostic_report"] = raw
+        state["diagnostic_report"] = json.dumps({
+            "jd_keywords": [],
+            "present_keywords": [],
+            "missing_keywords": [],
+            "match_score": 0,
+            "summary": raw[:500]
+        })
         return state
 
-    state["keywords_missing"] = data.get("missing_keywords", []) or []
-    state["diagnostic_report"] = json.dumps(data, indent=2)
+    jd_keywords = data.get("jd_keywords", []) or []
+    present_keywords = data.get("present_keywords", []) or []
+    missing_keywords = data.get("missing_keywords", []) or []
+
+    # normalize + dedupe
+    jd_keywords = list(dict.fromkeys([str(x).strip() for x in jd_keywords if str(x).strip()]))
+    present_keywords = list(dict.fromkeys([str(x).strip() for x in present_keywords if str(x).strip()]))
+    missing_keywords = list(dict.fromkeys([str(x).strip() for x in missing_keywords if str(x).strip()]))
+
+    # recompute missing if model output is inconsistent
+    jd_norm = {normalize_keyword(x): x for x in jd_keywords}
+    present_norm = {normalize_keyword(x) for x in present_keywords}
+    corrected_present = [orig for norm, orig in jd_norm.items() if norm in present_norm]
+    corrected_missing = [orig for norm, orig in jd_norm.items() if norm not in present_norm]
+
+    match_score = compute_keyword_overlap(jd_keywords, corrected_present)
+
+    final_report = {
+        "jd_keywords": jd_keywords,
+        "present_keywords": corrected_present,
+        "missing_keywords": corrected_missing,
+        "keyword_categories": data.get("keyword_categories", {}),
+        "summary": data.get("summary", ""),
+        "match_score": match_score,
+    }
+
+    state["keywords_missing"] = corrected_missing
+    state["diagnostic_report"] = json.dumps(final_report, indent=2)
     return state
 
 
@@ -178,35 +280,70 @@ def project_selector_node(state: AgentState) -> AgentState:
         state["selected_projects"] = []
         return state
 
-    # Make project list compact (avoid huge prompts)
     compact_projects = []
-    for p in projects[:30]:  # cap count
+    for p in projects[:30]:
         name = (p.get("name") or "").strip()
         desc = (p.get("description") or "").strip()
         if name:
-            compact_projects.append({"name": name, "description": desc[:400]})
+            compact_projects.append({
+                "name": name,
+                "description": desc[:500]
+            })
 
-    projects_text = "\n".join([f"- {p['name']}: {p['description']}" for p in compact_projects])
+    if not compact_projects:
+        state["selected_projects"] = []
+        return state
+
+    projects_json = json.dumps(compact_projects, indent=2)
+    jd = truncate(state.get("job_description", ""), 5000)
+    missing_keywords = state.get("keywords_missing", []) or []
 
     prompt = f"""
-Job Description:
-{truncate(state.get("job_description", ""), 4500)}
+You are selecting the best portfolio projects for a specific job application.
 
-Student Projects:
-{projects_text}
+TASK:
+Select the EXACT TOP 3 projects from the provided PROJECT LIST that best match the JOB DESCRIPTION.
 
-Task:
-Select the TOP 3 most relevant project NAMES for this role.
+SELECTION CRITERIA:
+1. Strong technical relevance to the JD
+2. Demonstrates similar tools, frameworks, architectures, or responsibilities
+3. Shows engineering depth, implementation skill, or measurable outcomes
+4. Prefer projects aligned with software engineering, ML, data, systems, FPGA, embedded, APIs, cloud, or automation if the JD emphasizes them
+5. Prefer projects that can help cover missing JD keywords when truthful
+6. Select ONLY from the provided project names
+7. Do NOT invent or rename projects
 
-Return ONLY a JSON array of strings, exactly like:
-["Project 1", "Project 2", "Project 3"]
+OUTPUT JSON EXACTLY:
+{{
+  "selected_project_names": ["Exact Name 1", "Exact Name 2", "Exact Name 3"],
+  "reasons": [
+    "why project 1 matches",
+    "why project 2 matches",
+    "why project 3 matches"
+  ]
+}}
+
+JOB DESCRIPTION:
+{jd}
+
+MISSING KEYWORDS:
+{", ".join(missing_keywords) if missing_keywords else "None"}
+
+PROJECT LIST:
+{projects_json}
 """.strip()
 
     resp = client.chat.completions.create(
         model=MODEL_PROJECTS,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {
+                "role": "system",
+                "content": "Return ONLY valid JSON. No markdown. No commentary."
+            },
+            {"role": "user", "content": prompt}
+        ],
         temperature=0.0,
-        max_tokens=120,
+        max_tokens=350,
     )
 
     raw = get_message_text(resp)
@@ -215,25 +352,29 @@ Return ONLY a JSON array of strings, exactly like:
         state["selected_projects"] = compact_projects[:3]
         return state
 
-    # extract json array
-    m = re.search(r"\[.*\]", raw, flags=re.DOTALL)
-    if not m:
+    data = extract_first_json_object(raw)
+
+    if not isinstance(data, dict):
         state["selected_projects"] = compact_projects[:3]
         return state
 
-    try:
-        selected_names = json.loads(m.group(0))
-        if not isinstance(selected_names, list):
-            raise ValueError("Not a list")
-        selected_set = set([str(x) for x in selected_names])
-        state["selected_projects"] = [p for p in compact_projects if p["name"] in selected_set][:3]
-        if not state["selected_projects"]:
-            state["selected_projects"] = compact_projects[:3]
-    except Exception:
-        state["selected_projects"] = compact_projects[:3]
+    selected_names = data.get("selected_project_names", []) or []
+    selected_names = [str(x).strip() for x in selected_names if str(x).strip()]
 
+    selected_lookup = {p["name"]: p for p in compact_projects}
+    selected_projects = [selected_lookup[name] for name in selected_names if name in selected_lookup]
+
+    # backfill if model returns fewer than 3
+    if len(selected_projects) < min(3, len(compact_projects)):
+        used = {p["name"] for p in selected_projects}
+        for p in compact_projects:
+            if p["name"] not in used:
+                selected_projects.append(p)
+            if len(selected_projects) >= min(3, len(compact_projects)):
+                break
+
+    state["selected_projects"] = selected_projects[:3]
     return state
-
 
 # -----------------------------------------------------------------------------
 # Node 3: Rewrite resume tailored to the JD
@@ -242,48 +383,70 @@ def resume_modifier_node(state: AgentState) -> AgentState:
     selected_projects = state.get("selected_projects") or []
     selected_projects_text = "\n".join(
         [f"- {p.get('name','')}: {p.get('description','')}" for p in selected_projects]
-    ).strip() or "Use projects already in the resume."
+    ).strip() or "Use the strongest existing projects already present in the resume."
 
-    missing_keywords = ", ".join(state.get("keywords_missing") or []) or "None"
+    missing_keywords = state.get("keywords_missing") or []
+    missing_keywords_text = ", ".join(missing_keywords) if missing_keywords else "None"
 
     prompt = f"""
-You are an expert resume writer.
+You are an expert ATS resume editor.
 
-Job Description:
-{truncate(state.get("job_description", ""), 6000)}
+TASK:
+Rewrite the resume so it is better aligned with the JOB DESCRIPTION while staying 100% truthful.
 
-Original Resume:
-{truncate(state.get("resume_text", ""), 9000)}
+IMPORTANT RULES:
+1. Return ONLY the rewritten resume text.
+2. Do NOT use markdown fences.
+3. Do NOT fabricate experience, projects, tools, metrics, dates, responsibilities, or achievements.
+4. Keep the same overall resume structure and section order if possible.
+5. Preserve the candidate's real background and strongest technical areas.
+6. Make the writing ATS-friendly and concise.
+7. Use strong action verbs.
+8. Prefer technical, measurable, implementation-focused bullets.
+9. Naturally incorporate relevant missing keywords ONLY when they are genuinely supported by the original resume or selected projects.
+10. Highlight the selected projects prominently in the Projects section.
+11. Keep exactly 3 selected projects if at least 3 are available.
+12. If space is tight, shorten bullets instead of dropping the selected projects.
 
-Selected Projects to highlight:
+JOB DESCRIPTION:
+{truncate(state.get("job_description", ""), 7000)}
+
+ORIGINAL RESUME:
+{truncate(state.get("resume_text", ""), 10000)}
+
+SELECTED PROJECTS TO PRIORITIZE:
 {selected_projects_text}
 
-Missing keywords to naturally incorporate (only if truthful):
-{missing_keywords}
+IMPORTANT MISSING KEYWORDS TO INCORPORATE IF TRUTHFUL:
+{missing_keywords_text}
 
-Instructions:
-- Keep the same structure and format
-- Rewrite bullets to match JD language
-- Highlight the selected projects prominently
-- Keep ATS-friendly
-- Do NOT fabricate experience or skills
+REWRITE GOALS:
+- Match JD language more closely
+- Improve summary
+- Strengthen experience bullets
+- Make projects more relevant to the target role
+- Improve ATS keyword coverage
+- Keep output professional and recruiter-friendly
 
-Return the complete rewritten resume text only.
+Return only the final rewritten resume text.
 """.strip()
 
     resp = client.chat.completions.create(
         model=MODEL_REWRITE,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-        max_tokens=1400,
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a precise ATS resume rewriter. Output only the final resume text."
+            },
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.15,
+        max_tokens=1800,
     )
 
     raw = get_message_text(resp)
-
-    # fallback: if no output, keep original resume
     state["tailored_resume"] = raw.strip() if raw else state.get("resume_text", "")
     return state
-
 
 # -----------------------------------------------------------------------------
 # Build the LangGraph pipeline
@@ -322,9 +485,29 @@ def run_resume_agent(job_description: str, resume_text: str, projects: List[dict
         "diagnostic_report": ""
     })
 
+    diagnostic_obj = {}
+    raw_report = result.get("diagnostic_report", "")
+    if isinstance(raw_report, str) and raw_report.strip():
+        try:
+            diagnostic_obj = json.loads(raw_report)
+        except Exception:
+            diagnostic_obj = {
+                "jd_keywords": [],
+                "present_keywords": [],
+                "missing_keywords": result.get("keywords_missing", []),
+                "match_score": 0,
+                "summary": raw_report[:500],
+            }
+
+    selected_projects = result.get("selected_projects", []) or []
+
     return {
-        "diagnostic_report": result.get("diagnostic_report", ""),
-        "missing_keywords": result.get("keywords_missing", []),
-        "selected_projects": [p.get("name", "") for p in result.get("selected_projects", [])],
+        "diagnostic_report": raw_report,
+        "diagnostic": diagnostic_obj,
+        "missing_keywords": diagnostic_obj.get("missing_keywords", result.get("keywords_missing", [])),
+        "present_keywords": diagnostic_obj.get("present_keywords", []),
+        "jd_keywords": diagnostic_obj.get("jd_keywords", []),
+        "match_score": diagnostic_obj.get("match_score", 0),
+        "selected_projects": selected_projects,
         "tailored_resume": result.get("tailored_resume", ""),
     }

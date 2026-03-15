@@ -11,3 +11,4 @@ streamlit
 openai
 PyPDF2
 pdflatex
+fpdf

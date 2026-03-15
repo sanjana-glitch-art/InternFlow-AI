@@ -350,25 +350,77 @@ def bar_color(pct):
     if pct >= 45: return "#fcd34d"
     return "#fca5a5"
 
+import re
+
+def norm(s: str) -> str:
+    s = (s or "").lower()
+    s = s.replace("–", "-").replace("—", "-").replace("&", " and ")
+    s = re.sub(r"[^a-z0-9\+\#\.\-/ ]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def keyword_variants(term: str):
+    t = norm(term)
+    mapping = {
+        "ml": {"ml", "machine learning"},
+        "dl": {"dl", "deep learning"},
+        "cv": {"cv", "computer vision"},
+        "nlp": {"nlp", "natural language processing"},
+        "llm": {"llm", "large language model", "large language models"},
+        "aws": {"aws", "amazon web services"},
+        "api": {"api", "apis", "rest api", "restful api"},
+        "ci/cd": {"ci/cd", "ci cd", "cicd"},
+        "systemverilog": {"systemverilog", "system verilog"},
+        "rtl": {"rtl", "rtl design"},
+    }
+    return mapping.get(t, {t})
+
+
 def compute_skill_match(job, profile):
-    skills = profile.get("skills", [])
+    skills = profile.get("skills", []) or []
     if not skills:
         return 0
-    desc = (job.get("description", "") + " " + job.get("title", "")).lower()
-    hits = sum(1 for s in skills if s.lower() in desc)
-    return min(int((hits / max(len(skills), 1)) * 100), 99)
+
+    text = norm((job.get("description", "") or "") + " " + (job.get("title", "") or ""))
+    matched = 0
+
+    for s in skills:
+        variants = keyword_variants(s)
+        if any(v in text for v in variants):
+            matched += 1
+
+    score = round(100 * matched / max(len(skills), 1))
+    return min(score, 100)
+
 
 def compute_resume_fit(job, profile):
-    roles = profile.get("target_roles", [])
-    title = job.get("title", "").lower()
-    if not roles:
-        return 0
-    hits = sum(1 for r in roles if any(w in title for w in r.lower().split()))
-    base = min(int((hits / max(len(roles), 1)) * 80), 80)
-    desc = job.get("description", "").lower()
-    if "intern" in desc or "entry" in desc or "new grad" in desc:
-        base += 15
-    return min(base, 99)
+    roles = profile.get("target_roles", []) or []
+    text = norm((job.get("title", "") or "") + " " + (job.get("description", "") or ""))
+
+    role_hits = 0
+    for role in roles:
+        role_tokens = [tok for tok in norm(role).split() if len(tok) > 2]
+        if role_tokens and sum(tok in text for tok in role_tokens) >= max(1, len(role_tokens) // 2):
+            role_hits += 1
+
+    base = round(100 * role_hits / max(len(roles), 1)) if roles else 0
+
+    student_bonus = 0
+    if any(x in text for x in ["intern", "internship", "new grad", "entry level", "student"]):
+        student_bonus += 15
+
+    loc_bonus = 0
+    preferred_locations = [norm(x) for x in profile.get("preferred_locations", []) or []]
+    job_locs = " ".join(norm(x) for x in job.get("locations", []) or [])
+    if preferred_locations and any(loc in job_locs for loc in preferred_locations):
+        loc_bonus = 10
+
+    return min(base + student_bonus + loc_bonus, 100)
+
+
+def agent_rec_score(sm, rf):
+    return min(round(sm * 0.65 + rf * 0.35), 100)
 
 def agent_rec_score(sm, rf):
     return min(int(sm * 0.6 + rf * 0.4), 99)
@@ -433,7 +485,7 @@ with c4:
         st.switch_page("pages/4_agent.py")
 with c5:
     if st.button("✅ Tracker", use_container_width=True):
-        st.switch_page("pages/5_resume_output.py")
+        st.switch_page("pages/5_resume_arsenal.py")
 
 st.markdown("<div class='div'></div>", unsafe_allow_html=True)
 

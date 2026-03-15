@@ -610,11 +610,20 @@ if run_btn:
                 st.stop()
 
             raw = response.json()
-            diagnostic      = try_parse_json(raw.get("diagnostic_report", ""))
-            missing_kw      = raw.get("missing_keywords", []) or diagnostic.get("missing_keywords", [])
-            present_kw      = diagnostic.get("present_keywords", [])
-            match_score     = int(diagnostic.get("match_score", 0) or 0)
-            sel_projects    = normalize_projects(raw.get("selected_projects", []), projects)
+
+            diagnostic = raw.get("diagnostic", {})
+            if not diagnostic:
+                diagnostic = try_parse_json(raw.get("diagnostic_report", ""))
+
+            present_kw = raw.get("present_keywords", []) or diagnostic.get("present_keywords", []) or []
+            missing_kw = raw.get("missing_keywords", []) or diagnostic.get("missing_keywords", []) or []
+            jd_keywords = raw.get("jd_keywords", []) or diagnostic.get("jd_keywords", []) or []
+            match_score = int(raw.get("match_score", 0) or diagnostic.get("match_score", 0) or 0)
+
+            if jd_keywords and match_score == 0:
+                match_score = int(round(100 * len(present_kw) / max(len(jd_keywords), 1)))
+
+            sel_projects = normalize_projects(raw.get("selected_projects", []), projects)
             tailored_resume = raw.get("tailored_resume", "")
 
             st.session_state.agent_result = {
@@ -622,10 +631,12 @@ if run_btn:
                     "match_score": match_score,
                     "present_keywords": present_kw,
                     "missing_keywords": missing_kw,
+                    "jd_keywords": jd_keywords,
                 },
                 "selected_projects": sel_projects,
-                "tailored_resume":   tailored_resume,
+                "tailored_resume": tailored_resume,
             }
+
             st.session_state.agent_jd     = jd_text
             st.session_state.agent_resume = resume_text
             st.success("✅ Analysis complete! Scroll down to see your results.")
@@ -721,7 +732,7 @@ if st.session_state.agent_result:
                 unsafe_allow_html=True)
 
         with sc3:
-            weak  = weak_bullets(orig_resume)
+            weak = weak_bullets(tailored or orig_resume)
             wb_n  = len(weak)
             wb_col = "#6ee7b7" if wb_n == 0 else "#fcd34d" if wb_n <= 2 else "#fca5a5"
             st.markdown(
